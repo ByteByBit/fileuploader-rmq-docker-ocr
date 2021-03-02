@@ -1,0 +1,117 @@
+version: '3.3'
+
+services:
+  nginx_upload:
+    build: ./uploader_api/nginx
+    ports:
+      - 1339:80
+    depends_on:
+      - upload
+    networks:
+      - rmq
+
+  auth_db:
+    image: postgres:12-alpine
+    volumes:
+      - auth_db_vol:/var/lib/postgresql/data
+    env_file:
+      - ./auth/db/.env.prod.db
+    networks:
+      - rmq
+
+  upload_db:
+    image: postgres:12-alpine
+    volumes:
+      - upload_db_vol:/var/lib/postgresql/data
+    env_file:
+      - ./uploader_api/db/.env.prod.db
+    expose:
+      - 5433
+    ports:
+      - 5433:5432
+    networks:
+      - rmq
+
+  upload:
+    restart: always
+    build:
+      context: ./uploader_api
+      dockerfile: Dockerfile
+    command: gunicorn --bind 0.0.0.0:5001 server:app --reload --pythonpath /uploader_api/ 
+    environment:
+      FLASK_DEBUG: 1
+      FLASK_APP: /usr/src/uploader_api/server.py
+    expose:
+      - 5001
+    depends_on:
+      - upload_db
+    links:
+      - auth
+      - rmq_server
+    volumes: 
+      - ./uploader_api/project/src:/usr/src/uploader_api/project/src
+    networks:
+      - rmq
+
+  auth:
+    build:
+      context: ./auth/
+      dockerfile: Dockerfile
+    command: gunicorn --bind 0.0.0.0:5000 --reload server:app 
+    environment:
+      FLASK_DEBUG: 1
+      FLASK_APP: /usr/src/auth/server.py
+    expose:
+      - 5000
+    depends_on:
+      - auth_db
+    volumes: 
+      - ./auth/project/src:/usr/src/auth/src
+    networks:
+      - rmq
+
+  rmq_server:
+      hostname: rmq_server
+      environment:
+      - RABBITMQ_DEFAULT_USER=guest1
+      - RABBITMQ_DEFAULT_PASS=guest1
+      image: "rabbitmq:3-management"
+      ports:
+        - "15672:15672"
+        - "5672:5672"
+      networks:
+        - rmq
+
+  preprocessor:
+    build:
+      context: ./preprocessor/
+      dockerfile: Dockerfile
+    volumes: 
+      - ./preprocessor:/usr/src/preprocessor
+    networks:
+      - rmq
+
+  ocr:
+    build:
+      context: ./ocr/
+      dockerfile: Dockerfile
+    volumes: 
+      - ./ocr:/usr/src/ocr
+    networks:
+      - rmq
+
+  logs:
+    build:
+      context: ./logs/
+      dockerfile: Dockerfile
+    volumes: 
+      - ./logs:/usr/src/logger
+    networks:
+      - rmq   
+      
+networks:
+  rmq:
+    driver: bridge
+volumes: 
+  auth_db_vol:
+  upload_db_vol:

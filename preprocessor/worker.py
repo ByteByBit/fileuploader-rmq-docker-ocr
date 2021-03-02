@@ -1,0 +1,74 @@
+#!/usr/bin/env python
+import datetime
+import json 
+
+from utils import FileStorage, preprocess_img, RMQ, LoggerMsg
+
+
+def callback(ch, method, properties, body):
+
+    body = json.loads(body)
+    
+    user_id = body['user_id']
+    storage_name = body['storage_name']
+    job_id = body['job_id']
+    extension = body['extension']
+    priority = body['priority']
+
+    # Logger.
+    msg = 'Start, user [{}], storage name [{}], job ID [{}]'.format(user_id, storage_name, job_id)
+    m = LoggerMsg(t='info', msg=msg, l_name='preprocessor')
+    rmq.publish(msg=m.toJSON(), exchange='logs')
+    
+    storage = FileStorage(user_id)
+
+    # Samba connection.
+    if not storage.connect():
+        # ! Implement temporary storage
+        # ! and reporting issue.
+        msg = 'Connecting to file storage server failed at [{}]'.format(datetime.datetime.now())
+        m = LoggerMsg(t='critical', msg=msg, l_name='preprocessor')
+        rmq.publish(msg=m.toJSON(), exchange='logs')
+
+        return False
+    
+    if not storage.download(storage.original_folder, storage_name):
+        # ! Implement temporary storage
+        # ! and reporting issue.
+        msg = 'Downloading file from storage server failed at [{}]'.format(datetime.datetime.now())
+        m = LoggerMsg(t='critical', msg=msg, l_name='preprocessor')
+        rmq.publish(msg=m.toJSON(), exchange='logs')
+        return False
+
+    img = preprocess_img(storage.file)
+
+    f_name = str(job_id) + '.png'
+
+    # Logger.
+    msg = 'Grayscaled img, user [{}], storage name [{}], job ID [{}] at [{}]'.format(user_id, f_name, job_id, datetime.datetime.now())
+    m = LoggerMsg(t='info', msg=msg, l_name='preprocessor')
+    rmq.publish(msg=m.toJSON(), exchange='logs')
+
+    
+    if not storage.upload(img, storage.preproc_folder, f_name):
+        msg = 'Failed to store preprocessed file at [{}] user [{}], storage name [{}], job ID [{}]'.format(user_id, f_name, job_id, datetime.datetime.now())
+        m = LoggerMsg(t='critical', msg=msg, l_name='preprocessor')
+        rmq.publish(msg=m.toJSON(), exchange='logs')
+
+        return False
+    
+    # OCR.
+    message = {
+        'storage_name': f_name,
+        'priority': priority,
+        'job_id': job_id,
+        'user_id': user_id,
+        'extension': extension
+    }
+    m = json.dumps(message)
+    rmq.publish(
+        msg=m, exchange='ocr'
+    )
+
+rmq = RMQ()
+rmq.start_consumer('preprocess', callback)
